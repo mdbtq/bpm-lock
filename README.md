@@ -13,8 +13,10 @@ segment to fit — pitch unchanged.
 ## Install
 
 ```bash
-pipx install ./bpm-lock        # or: pip install ./bpm-lock
+pipx install git+https://github.com/mdbtq/bpm-lock@v1.0.0
 ```
+
+Or from a local checkout: `pipx install .`
 
 ## Usage
 
@@ -85,3 +87,7 @@ cd tests && PYTHONPATH=../src python3 -m unittest -v
 
 Synthetic tracks with drifting tempo; each backend must land every beat within
 3 ms of a perfect grid. The Rubber Band test runs only when the CLI is installed.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -7,7 +7,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from . import stretchers
+from . import __version__, stretchers
 from .pipeline import BpmLocker, Options, Report
 from .tempo_map import octave_factor
 
@@ -52,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="bpm-lock",
         description="Lock pre-rendered music to one fixed tempo by beat-wise time-stretching.")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("inputs", nargs="+", type=Path, help="audio files and/or folders")
     p.add_argument("-b", "--bpm", type=float, help="target BPM (default: detected, rounded)")
     p.add_argument("--round", type=float, default=1.0, dest="rounding",

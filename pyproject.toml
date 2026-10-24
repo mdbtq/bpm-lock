@@ -4,13 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bpm-lock"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Lock pre-rendered music to one fixed tempo by beat-wise time-stretching"
 requires-python = ">=3.10"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "MDBTQ"}]
 dependencies = ["numpy>=1.24", "scipy>=1.10"]
 
 [project.scripts]
 bpm-lock = "bpm_lock.cli:main"
+
+[project.urls]
+Repository = "https://github.com/mdbtq/bpm-lock"
+
+[tool.setuptools.dynamic]
+version = {attr = "bpm_lock.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
