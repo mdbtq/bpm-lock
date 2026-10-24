@@ -4,6 +4,18 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-24
+
+### Changed
+- Report separates tempo drift (removed) from per-hit timing spread (preserved
+  groove/feel). Drift is the 98th percentile of the smoothed tempo curve's
+  deviation from a fixed grid, excluding the first/last 8 beats, so a single
+  loose hit or an outro no longer reads as residual drift.
+- Tempo range is reported from the smoothed tempo curve.
+
+### Fixed
+- Silenced scipy `WavFileWarning` on Rubber Band output (extra WAV chunks).
+
 ## [1.0.0] - 2026-10-24
 
 ### Added
@@ -16,4 +28,5 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - CLI with batch folders, parallel jobs, output format selection, JSON report
   and post-processing verification.
 
+[1.0.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.0.1
 [1.0.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.0.0

@@ -13,6 +13,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Protocol
 
@@ -47,7 +48,9 @@ def _write_wav(path: Path, audio: Audio) -> None:
 
 
 def _read_wav(path: Path) -> np.ndarray:
-    _, data = wavfile.read(path)
+    with warnings.catch_warnings():  # Rubber Band adds chunks scipy doesn't parse
+        warnings.simplefilter("ignore", wavfile.WavFileWarning)
+        _, data = wavfile.read(path)
     data = data.astype(np.float32)
     return (data[:, None] if data.ndim == 1 else data).T
 

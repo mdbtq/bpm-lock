@@ -13,7 +13,7 @@ segment to fit — pitch unchanged.
 ## Install
 
 ```bash
-pipx install git+https://github.com/mdbtq/bpm-lock@v1.0.0
+pipx install git+https://github.com/mdbtq/bpm-lock@v1.0.1
 ```
 
 Or from a local checkout: `pipx install .`
@@ -30,11 +30,16 @@ bpm-lock in/ --bpm 174 -f flac --json report.json
 Output per file:
 
 ```
-track.wav: 173.73 BPM (range 172.39-175.15, drift 88.7 ms) -> 174 BPM [rubberband], residual drift 1.2 ms
+track.wav: 159.78 BPM (range 153.45-163.88, drift 795.3 ms) -> 155 BPM [rubberband], now 155.00 BPM, drift 13.6 ms (per-hit spread 22.8 ms, kept as-is)
 ```
 
-`drift` is the largest deviation of a beat from a perfect fixed grid before
-processing; `residual drift` is re-measured on the output.
+- `range` – slowest/fastest local tempo of the smoothed tempo curve.
+- `drift` – how far the tempo curve wanders from a fixed grid (98th percentile).
+  This is what bpm-lock removes.
+- `per-hit spread` – how far individual hits sit from that curve (95th
+  percentile): the groove of a played performance plus detection noise on dense
+  material. It is deliberately preserved; bpm-lock fixes the tempo, it does not
+  quantize.
 
 | Option | Default | Meaning |
 |---|---|---|

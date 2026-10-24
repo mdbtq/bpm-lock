@@ -44,7 +44,9 @@ def _format(r: Report) -> str:
         return line + " -> already fixed, skipped"
     line += f" -> {r.target_bpm * f:g} BPM [{r.backend}]"
     if r.after:
-        line += f", residual drift {r.after.max_drift_ms:.1f} ms"
+        a = r.after
+        line += (f", now {a.detected_bpm * f:.2f} BPM, drift {a.max_drift_ms:.1f} ms"
+                 f" (per-hit spread {a.spread_ms:.1f} ms, kept as-is)")
     return line
 
 

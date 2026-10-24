@@ -55,7 +55,7 @@ class BpmLocker:
         hint = o.target_bpm or o.bpm_hint
         result = self._tracker_factory(hint, o.target_bpm is not None).track(
             audio.mono(), audio.sample_rate)
-        before = tempo_map.analyse(result.beats)
+        before = tempo_map.analyse(result.raw_beats)
         target = o.target_bpm or tempo_map.choose_target_bpm(result.beats, o.rounding)
 
         already_fixed = (before.max_drift_ms < o.min_drift_ms

@@ -5,6 +5,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .beats import robust_smooth
+
+ANALYSIS_WINDOW = 15  # beats; separates slow drift from per-hit timing
+EDGE_BEATS = 8
+
 
 @dataclass(frozen=True)
 class TimeMap:
@@ -24,9 +29,10 @@ class TimeMap:
 @dataclass(frozen=True)
 class TempoStats:
     detected_bpm: float
-    min_bpm: float
-    max_bpm: float
-    max_drift_ms: float   # largest deviation of a beat from the ideal fixed grid
+    min_bpm: float          # slowest local tempo (smoothed, 2nd percentile)
+    max_bpm: float          # fastest local tempo (smoothed, 98th percentile)
+    max_drift_ms: float     # deviation of the tempo curve from a fixed grid (p98)
+    spread_ms: float        # per-hit timing spread around the tempo curve (p95)
 
 
 def octave_factor(bpm: float, low: float = 100.0) -> float:
@@ -47,18 +53,24 @@ def choose_target_bpm(beats: np.ndarray, rounding: float | None) -> float:
     return bpm
 
 
-def analyse(beats: np.ndarray) -> TempoStats:
-    ibi = np.diff(beats)
-    local = 60.0 / ibi
-    # best straight-line (constant tempo) fit: deviation shows accumulated drift
+def analyse(raw_beats: np.ndarray, window: int = ANALYSIS_WINDOW) -> TempoStats:
+    """Separate tempo drift (slow, what bpm-lock removes) from per-hit timing
+    spread (fast, the groove/feel or detection noise, which is preserved)."""
+    curve = robust_smooth(raw_beats, window)
+    # The first/last beats sit in intros/outros/fades where tracking is least
+    # reliable and smoothing has no context; keep them out of the statistics.
+    core = slice(EDGE_BEATS, -EDGE_BEATS) if len(curve) > 4 * EDGE_BEATS else slice(None)
+    beats, raw = curve[core], raw_beats[core]
+    local = 60.0 / np.diff(beats)
     idx = np.arange(len(beats))
     slope, offset = np.polyfit(idx, beats, 1)
-    drift = beats - (slope * idx + offset)
+    drift = np.abs(beats - (slope * idx + offset))
     return TempoStats(
-        detected_bpm=60.0 / slope,
+        detected_bpm=float(60.0 / slope),
         min_bpm=float(np.percentile(local, 2)),
         max_bpm=float(np.percentile(local, 98)),
-        max_drift_ms=float(np.max(np.abs(drift)) * 1000),
+        max_drift_ms=float(np.percentile(drift, 98) * 1000),
+        spread_ms=float(np.percentile(np.abs(raw - beats), 95) * 1000),
     )
 
 

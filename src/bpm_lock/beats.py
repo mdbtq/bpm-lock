@@ -57,7 +57,7 @@ class DynamicProgrammingBeatTracker:
         if len(frames) < 4:
             raise ValueError("Too few beats detected; is this rhythmic material?")
         raw = _refine(env, frames) / fps
-        smoothed = _robust_smooth(raw, self.config.smoothing_beats)
+        smoothed = robust_smooth(raw, self.config.smoothing_beats)
         return BeatResult(beats=smoothed, raw_beats=raw, tempo=tempo)
 
     # -- tempo ---------------------------------------------------------------
@@ -210,7 +210,7 @@ def _refine(env: np.ndarray, frames: np.ndarray, radius: int = 3) -> np.ndarray:
     return out
 
 
-def _robust_smooth(times: np.ndarray, window: int, iterations: int = 3) -> np.ndarray:
+def robust_smooth(times: np.ndarray, window: int, iterations: int = 3) -> np.ndarray:
     """Local quadratic fit of beat time vs. beat index with outlier rejection.
 
     Removes per-beat detection jitter while following slow tempo drift.
