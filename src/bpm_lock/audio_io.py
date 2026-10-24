@@ -34,6 +34,12 @@ class Audio:
     def mono(self) -> np.ndarray:
         return self.samples.mean(axis=0)
 
+    def padded(self, frames: int) -> "Audio":
+        """Zero-pad at the end to `frames` (stems of slightly different length)."""
+        if frames <= self.frames:
+            return self
+        return Audio(np.pad(self.samples, ((0, 0), (0, frames - self.frames))), self.sample_rate)
+
 
 def _require(binary: str) -> str:
     path = shutil.which(binary)

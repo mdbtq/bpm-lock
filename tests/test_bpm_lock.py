@@ -10,7 +10,7 @@ from bpm_lock.audio_io import Audio
 from bpm_lock.beats import DynamicProgrammingBeatTracker
 from bpm_lock.pipeline import BpmLocker, Options
 
-from fixtures import SR, drifting_track, kick_times, stepped_track
+from fixtures import SR, bass_onsets, drifting_track, kick_times, render_stems, stepped_track
 
 
 def _grid_error_ms(times: np.ndarray) -> tuple[float, float]:
@@ -162,6 +162,47 @@ class EndToEnd(unittest.TestCase):
                 self.assertIsNotNone(s.after)
                 self.assertAlmostEqual(s.after.detected_bpm, s.bpm, delta=0.05)
                 self.assertLess(s.after.max_drift_ms, 3.0)
+
+
+
+class Stems(unittest.TestCase):
+    def _make_set(self, tmp: Path) -> list[Path]:
+        _, beats = drifting_track(174, duration=40)
+        paths = []
+        for name, audio in render_stems(beats, 40).items():
+            frames = audio.shape[1] - (SR // 10 if name == "pad" else 0)  # pad 0.1 s shorter
+            paths.append(tmp / f"{name}.wav")
+            audio_io.write(paths[-1], Audio(audio[:, :frames], SR))
+        return paths
+
+    def test_stems_share_one_time_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = self._make_set(Path(tmp))
+            dsts = [p.with_name(p.stem + "_locked.wav") for p in srcs]
+            report = BpmLocker(stretchers.select("auto"), Options(target_bpm=174)).process_stems(
+                srcs, dsts, reference=srcs[0], name="set", jobs=3)
+            outs = [audio_io.read(d) for d in dsts]
+            self.assertEqual(len({o.frames for o in outs}), 1)        # identical lengths
+            self.assertEqual(report.reference, "drums.wav")
+            kicks = kick_times(outs[0].mono())
+            bass = bass_onsets(outs[1].mono())
+            bpm, max_dev = _grid_error_ms(kicks)
+            self.assertAlmostEqual(bpm, 174, delta=0.02)
+            # every bass note still sits exactly halfway between two drum hits
+            mids = (kicks[:-1] + kicks[1:]) / 2
+            offset = np.array([np.min(np.abs(mids - b)) for b in bass[2:-2]]) * 1000
+            self.assertLess(np.median(offset), 3.0)
+            self.assertLess(np.max(offset), 6.0)
+
+    def test_sample_rate_mismatch_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = self._make_set(Path(tmp))
+            odd = Path(tmp) / "odd.wav"
+            a = audio_io.read(srcs[2])
+            audio_io.write(odd, Audio(a.samples, 48000))
+            with self.assertRaises(ValueError):
+                BpmLocker(stretchers.select("auto"), Options()).process_stems(
+                    srcs + [odd], [p.with_name(p.stem + "_x.wav") for p in srcs + [odd]])
 
 
 if __name__ == "__main__":

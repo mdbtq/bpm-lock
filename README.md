@@ -14,7 +14,7 @@ changes, locking each section to its own tempo.
 ## Install
 
 ```bash
-pipx install git+https://github.com/mdbtq/bpm-lock@v1.1.1
+pipx install git+https://github.com/mdbtq/bpm-lock@v1.2.0
 ```
 
 Or from a local checkout: `pipx install .`
@@ -27,6 +27,7 @@ bpm-lock track.wav --bpm 174               # force target tempo (most reliable)
 bpm-lock ~/Music/in -o ~/Music/out -j 4    # whole folder, 4 files in parallel
 bpm-lock in/ --bpm 174 -f flac --json report.json
 bpm-lock track.wav --tolerance 3           # keep intentional tempo changes (sections)
+bpm-lock stems/ --reference drums          # stems: one analysis, identical stretch for all
 ```
 
 Output per file:
@@ -71,6 +72,30 @@ track.wav: 163.03 BPM (range 148.85-170.95, drift 677.6 ms) -> 3 sections [rubbe
 - A gradual tempo ramp is split into steps of roughly the tolerance. Use a
   larger tolerance (or none) to treat it as drift instead.
 
+## Stems (`--stems`, `--reference`)
+
+Stems must receive exactly the same time map, or they drift apart (a pad or a
+bass stem cannot be beat-tracked on its own). In stem mode:
+
+- every folder given is one stem set (its files, not subfolders); loose files
+  given together form one set;
+- one signal is analysed: the stem chosen with `--reference` (file name or a
+  unique part of it, e.g. `drums`), or the sum of all stems by default;
+- that single time map is applied to every stem, so each beat lands on the same
+  sample in all of them. Shorter stems are padded; all outputs have equal length;
+- stems with different sample rates are rejected;
+- `--jobs` renders the stems of a set in parallel.
+
+`--reference` implies `--stems`.
+
+```
+stems (3 stems, reference: drums.wav): 174.01 BPM (range 171.85-176.12, drift 41.7 ms) -> 174 BPM [rubberband], now 174.00 BPM, drift 1.5 ms (per-hit spread 1.6 ms, kept as-is)
+  3 stems written to /path/to/stems
+```
+
+Pick the stem with the clearest beat (usually drums) as reference. All other
+options, including `--tolerance`, work the same.
+
 ## Options
 
 | Option | Default | Meaning |
@@ -81,13 +106,15 @@ track.wav: 163.03 BPM (range 148.85-170.95, drift 677.6 ms) -> 3 sections [rubbe
 | `--min-section BEATS` | `32` | Shorter sections are merged into a neighbour |
 | `--round` | `1` | Rounding step for the detected tempo (`0` = none) |
 | `--hint` | `120` | Detection prior when `--bpm` is not given |
+| `-s, --stems` | off | Treat each folder as one stem set with a shared time map |
+| `-r, --reference NAME` | mix | Stem that defines the tempo (implies `--stems`) |
 | `--smooth` | `9` | Beats in the drift-smoothing window (`0` = follow every beat) |
 | `--skip-below MS` | `0` | Leave files untouched when drift < MS and BPM already matches |
 | `-o, --out-dir` | next to input | Output folder |
 | `--suffix` | `_locked` | Output filename suffix (inputs containing it are skipped) |
 | `-f, --format` | same as input | `wav`, `flac`, `aiff`, `mp3`, `m4a`, `ogg` |
 | `--backend` | `auto` | `rubberband`, `ffmpeg-rb`, `wsola` |
-| `-j, --jobs` | `1` | Parallel files |
+| `-j, --jobs` | `1` | Parallel files (stem mode: parallel stems within a set) |
 | `--no-verify` | off | Skip re-analysis of the output |
 | `--json FILE` | – | Machine-readable report |
 
@@ -102,7 +129,7 @@ track.wav: 163.03 BPM (range 148.85-170.95, drift 677.6 ms) -> 3 sections [rubbe
 ## Architecture
 
 ```
-cli ─► pipeline.BpmLocker ─► audio_io (ffmpeg)
+cli ─► pipeline.BpmLocker ─► audio_io (ffmpeg)     (one file, or a stem set + reference)
                          ├─► beats.BeatTracker      (protocol; DP tracker by default)
                          ├─► segmentation           (tempo sections; one section by default)
                          ├─► tempo_map.build        (beats + sections → time map)

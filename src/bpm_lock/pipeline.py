@@ -1,17 +1,30 @@
-"""Orchestrates read -> beat tracking -> sections -> time map -> stretch -> verify -> write."""
+"""Orchestrates read -> beat tracking -> sections -> time map -> stretch -> verify -> write.
+
+A single file and a set of stems go through the same path: one reference signal
+is analysed (the file itself, a chosen stem, or the sum of all stems) and the
+resulting time map is applied identically to every stem, so they stay
+sample-aligned.
+"""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 
 from . import audio_io, segmentation, tempo_map
+from .audio_io import Audio
 from .beats import BeatResult, BeatTracker, DynamicProgrammingBeatTracker, TrackerConfig
 from .stretchers import Stretcher
 
 NARROW = 1.10   # tracking range around a known tempo (single lock)
 WIDE = 1.40     # tracking range when sections may move away from it
+MIX = "mix of all stems"
+
+
+class StemError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -40,8 +53,10 @@ class SectionResult:
 
 @dataclass(frozen=True)
 class Report:
-    input: str
-    output: str | None
+    name: str                         # file name, or folder name for a stem set
+    inputs: list[str]
+    outputs: list[str]
+    reference: str                    # what was analysed
     backend: str
     beats: int
     before: tempo_map.TempoStats
@@ -51,6 +66,10 @@ class Report:
     @property
     def target_bpm(self) -> float:
         return self.sections[0].bpm
+
+    @property
+    def is_stem_set(self) -> bool:
+        return len(self.inputs) > 1
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -71,32 +90,69 @@ class BpmLocker:
             cfg = TrackerConfig(bpm_hint=hint, smoothing_beats=self.options.smoothing_beats)
         return DynamicProgrammingBeatTracker(cfg)
 
+    # -- public ----------------------------------------------------------------
     def process(self, src: Path, dst: Path) -> Report:
+        return self.process_stems([src], [dst], name=src.name)
+
+    def process_stems(self, srcs: list[Path], dsts: list[Path], reference: Path | None = None,
+                      name: str | None = None, jobs: int = 1) -> Report:
+        """Lock a set of stems with one shared time map.
+
+        `reference` (one of `srcs`) is analysed; without it the sum of all stems is.
+        """
+        if len(srcs) != len(dsts) or not srcs:
+            raise StemError("need one output path per input")
+        if reference is not None and reference not in srcs:
+            raise StemError(f"reference {reference.name} is not one of the stems")
+        stems = [audio_io.read(p) for p in srcs]
+        sample_rate = _common_sample_rate(stems, srcs)
+        frames = max(a.frames for a in stems)
+        stems = [a.padded(frames) for a in stems]
+
+        if reference is not None:
+            ref_mono = stems[srcs.index(reference)].mono()
+            ref_label = reference.name
+        else:
+            ref_mono = np.sum([a.mono() for a in stems], axis=0)
+            ref_label = srcs[0].name if len(srcs) == 1 else MIX
+        name = name or srcs[0].name
+        inputs = [str(p) for p in srcs]
+
         o = self.options
-        audio = audio_io.read(src)
         spread = (WIDE if o.tolerance else NARROW) if o.target_bpm else None
         result = self._tracker_factory(o.target_bpm or o.bpm_hint, spread).track(
-            audio.mono(), audio.sample_rate)
+            ref_mono, sample_rate)
         beats = result.beats
         before = tempo_map.analyse(result.raw_beats, result.repaired)
         sections = self._sections(result.repaired, beats)
 
         if len(sections) == 1 and (before.max_drift_ms < o.min_drift_ms
                                    and abs(before.detected_bpm - sections[0].bpm) < 0.01):
-            return Report(str(src), None, self.stretcher.name, len(beats), before,
+            return Report(name, inputs, [], ref_label, self.stretcher.name, len(beats), before,
                           self._results(beats, sections, None, None), skipped=True)
 
-        tmap = tempo_map.build(beats, audio.duration, sections)
-        out = self.stretcher.stretch(audio, tmap)
-        audio_io.write(dst, out)
+        tmap = tempo_map.build(beats, frames / sample_rate, sections)
+
+        def render(i: int) -> np.ndarray | None:
+            out = self.stretcher.stretch(stems[i], tmap)
+            audio_io.write(dsts[i], out)
+            return out.mono() if reference is None or srcs[i] == reference else None
+
+        with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            rendered = list(pool.map(render, range(len(stems))))
 
         check = None
         if o.verify:
+            if reference is not None:
+                out_mono = rendered[srcs.index(reference)]
+            else:
+                out_mono = np.sum([m for m in rendered if m is not None], axis=0)
             verify_spread = WIDE if len(sections) > 1 else NARROW
             check = self._tracker_factory(sections[0].bpm, verify_spread).track(
-                out.mono(), out.sample_rate)
-        return Report(str(src), str(dst), self.stretcher.name, len(beats), before,
-                      self._results(beats, sections, tmap, check), skipped=False)
+                out_mono, sample_rate)
+        return Report(name, inputs, [str(d) for d in dsts], ref_label, self.stretcher.name,
+                      len(beats), before, self._results(beats, sections, tmap, check),
+                      skipped=False)
 
     # -- internals -------------------------------------------------------------
     def _sections(self, raw: np.ndarray, beats: np.ndarray) -> list[segmentation.TempoSection]:
@@ -126,6 +182,14 @@ class BpmLocker:
             results.append(SectionResult(float(beats[s.start]), float(beats[s.end]), out_start,
                                          s.end - s.start, s.detected_bpm, s.bpm, after))
         return results
+
+
+def _common_sample_rate(stems: list[Audio], paths: list[Path]) -> int:
+    rates = {a.sample_rate for a in stems}
+    if len(rates) > 1:
+        detail = ", ".join(f"{p.name}: {a.sample_rate} Hz" for p, a in zip(paths, stems))
+        raise StemError(f"stems must share one sample rate ({detail})")
+    return rates.pop()
 
 
 def _within(times: np.ndarray, start: float, end: float) -> np.ndarray:

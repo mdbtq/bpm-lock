@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-10-24
+
+### Added
+- Stem mode (`--stems`): each folder is one stem set; one analysis, one time map
+  applied identically to every stem so they stay sample-aligned. Shorter stems
+  are padded so all outputs have equal length; mismatched sample rates are
+  rejected. `--jobs` renders stems of a set in parallel.
+- `--reference NAME` chooses the stem that defines the tempo (implies
+  `--stems`); default is the sum of all stems.
+- `BpmLocker.process_stems()` in the Python API.
+
+### Changed
+- JSON report: `input`/`output` replaced by `name`, `inputs`, `outputs` and
+  `reference` (also for single files).
+
 ## [1.1.1] - 2026-10-24
 
 ### Fixed
@@ -52,6 +67,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - CLI with batch folders, parallel jobs, output format selection, JSON report
   and post-processing verification.
 
+[1.2.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.2.0
 [1.1.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.1.1
 [1.1.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.1.0
 [1.0.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.0.1
