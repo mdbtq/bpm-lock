@@ -1,0 +1,49 @@
+"""Synthetic drum tracks with a drifting tempo, for tests."""
+from __future__ import annotations
+
+import numpy as np
+
+SR = 44100
+
+
+def drifting_track(base_bpm: float, duration: float = 40.0, wobble: float = 0.008,
+                   sr: int = SR, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Kick on 1+3, snare on 2+4, 8th hats, offbeat bass. Returns (stereo, beat_times)."""
+    beats, t = [], 0.3
+    while t < duration - 0.5:
+        beats.append(t)
+        t += 60 / (base_bpm * (1 + wobble * np.sin(2 * np.pi * t / 20)))
+    beats = np.array(beats)
+
+    rng = np.random.default_rng(seed)
+    y = np.zeros(int(duration * sr), np.float32)
+    n = np.arange(int(0.25 * sr)) / sr
+    kick = np.sin(2 * np.pi * (50 + 120 * np.exp(-n * 30)) * n) * np.exp(-n * 12)
+    snare = rng.standard_normal(len(n)) * np.exp(-n * 25) * 0.5 \
+        + np.sin(2 * np.pi * 190 * n) * np.exp(-n * 20) * 0.4
+    hat = rng.standard_normal(int(0.03 * sr)) * np.exp(-np.arange(int(0.03 * sr)) / sr * 120) * 0.2
+    bass = np.sin(2 * np.pi * 55 * n) * np.exp(-n * 8) * 0.4
+
+    def add(x: np.ndarray, at: float) -> None:
+        s = int(at * sr)
+        m = min(len(x), len(y) - s)
+        y[s:s + m] += x[:m]
+
+    for i, b in enumerate(beats):
+        add(kick if i % 2 == 0 else snare, b)
+        if i + 1 < len(beats):
+            half = b + (beats[i + 1] - b) / 2
+            add(hat, b)
+            add(hat, half)
+            add(bass, half)
+    return np.stack([y, y]) * 0.6, beats
+
+
+def kick_times(mono: np.ndarray, sr: int = SR) -> np.ndarray:
+    """Locate kicks/snares independently of the library (matched-filter peaks)."""
+    from scipy import signal
+    band = signal.sosfiltfilt(signal.butter(4, [120, 400], "bandpass", fs=sr, output="sos"), mono)
+    env = signal.sosfiltfilt(signal.butter(2, 80, fs=sr, output="sos"), np.abs(band))
+    onset = np.maximum(np.diff(env, prepend=env[0]), 0)
+    peaks, _ = signal.find_peaks(onset, height=0.25 * onset.max(), distance=int(0.25 * sr))
+    return peaks / sr
