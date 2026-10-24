@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-10-24
+
+### Fixed
+- Fills and breaks no longer cause sudden speed-ups or slow-downs. Beats the
+  tracker placed implausibly are detected (interval deviating from both the
+  beats before and after, or position slipping off a long robust tempo curve)
+  and rebuilt at the surrounding tempo. The beat count of such a stretch is
+  re-counted, so beats dropped or doubled by the tracker are restored.
+  Real tempo changes are recognised and left intact.
+
 ## [1.1.0] - 2026-10-24
 
 ### Added
@@ -42,6 +52,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - CLI with batch folders, parallel jobs, output format selection, JSON report
   and post-processing verification.
 
+[1.1.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.1.1
 [1.1.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.1.0
 [1.0.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.0.1
 [1.0.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.0.0

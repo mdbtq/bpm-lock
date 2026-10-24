@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from bpm_lock import audio_io, segmentation, stretchers, tempo_map
+from bpm_lock import beats as beats_mod
 from bpm_lock.audio_io import Audio
 from bpm_lock.beats import DynamicProgrammingBeatTracker
 from bpm_lock.pipeline import BpmLocker, Options
@@ -32,6 +33,36 @@ class TempoDetection(unittest.TestCase):
         self.assertEqual(len(r.beats), len(truth))
         err = (r.beats - truth) * 1000
         self.assertLess(np.std(err), 2.0)   # constant latency is fine; jitter is not
+
+
+class FillRepair(unittest.TestCase):
+    def test_dropped_and_misplaced_beats_in_fill_are_rebuilt(self):
+        _, truth = drifting_track(162, duration=60, wobble=0.0)
+        noise = np.random.default_rng(3).normal(0, 0.008, len(truth) - 2)  # played feel
+        k = int(np.argmax(truth >= 30))
+        messy = truth.copy()
+        messy[k:k + 10] += 0.06 * np.sin(np.linspace(0, np.pi, 10))   # tracker slips
+        messy = np.delete(messy, [k + 3, k + 7]) + noise               # and drops 2 beats
+        baseline = np.delete(truth, [0, 1]) + noise                    # same feel, no fill
+
+        def tempo(x):
+            repaired, reliable = beats_mod.repair(x, beats_mod.reliable_mask(x))
+            return repaired, reliable, 60 / np.diff(beats_mod.robust_smooth(repaired, 9))
+
+        repaired, reliable, t_fill = tempo(messy)
+        _, _, t_base = tempo(baseline)
+        self.assertEqual(len(repaired), len(truth))                    # dropped beats restored
+        self.assertFalse(reliable[k:k + 10].all())
+        j = int(np.argmax(repaired >= 30))
+        fill = t_fill[j - 5:j + 15]
+        self.assertAlmostEqual(fill.mean(), 162, delta=0.5)
+        self.assertLessEqual(np.abs(fill - 162).max(), np.abs(t_base - 162).max() + 0.5)
+
+    def test_clean_track_is_left_alone(self):
+        _, truth = drifting_track(174, duration=40)
+        repaired, reliable = beats_mod.repair(truth, beats_mod.reliable_mask(truth))
+        self.assertTrue(reliable.all())
+        self.assertTrue(np.array_equal(repaired, truth))
 
 
 class TimeMap(unittest.TestCase):

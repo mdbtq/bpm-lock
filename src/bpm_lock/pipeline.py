@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 
 from . import audio_io, segmentation, tempo_map
-from .beats import BeatTracker, DynamicProgrammingBeatTracker, TrackerConfig
+from .beats import BeatResult, BeatTracker, DynamicProgrammingBeatTracker, TrackerConfig
 from .stretchers import Stretcher
 
 NARROW = 1.10   # tracking range around a known tempo (single lock)
@@ -78,8 +78,8 @@ class BpmLocker:
         result = self._tracker_factory(o.target_bpm or o.bpm_hint, spread).track(
             audio.mono(), audio.sample_rate)
         beats = result.beats
-        before = tempo_map.analyse(result.raw_beats)
-        sections = self._sections(result.raw_beats, beats)
+        before = tempo_map.analyse(result.raw_beats, result.repaired)
+        sections = self._sections(result.repaired, beats)
 
         if len(sections) == 1 and (before.max_drift_ms < o.min_drift_ms
                                    and abs(before.detected_bpm - sections[0].bpm) < 0.01):
@@ -94,7 +94,7 @@ class BpmLocker:
         if o.verify:
             verify_spread = WIDE if len(sections) > 1 else NARROW
             check = self._tracker_factory(sections[0].bpm, verify_spread).track(
-                out.mono(), out.sample_rate).raw_beats
+                out.mono(), out.sample_rate)
         return Report(str(src), str(dst), self.stretcher.name, len(beats), before,
                       self._results(beats, sections, tmap, check), skipped=False)
 
@@ -110,7 +110,7 @@ class BpmLocker:
 
     @staticmethod
     def _results(beats: np.ndarray, sections: list[segmentation.TempoSection],
-                 tmap: tempo_map.TimeMap | None, check: np.ndarray | None) -> list[SectionResult]:
+                 tmap: tempo_map.TimeMap | None, check: BeatResult | None) -> list[SectionResult]:
         results = []
         for s in sections:
             after = None
@@ -119,9 +119,14 @@ class BpmLocker:
                 out_start = float(tmap.beat_targets[s.start])
                 out_end = float(tmap.beat_targets[s.end])
                 if check is not None:
-                    inside = check[(check >= out_start) & (check <= out_end)]
-                    if len(inside) >= 2 * tempo_map.ANALYSIS_WINDOW:
-                        after = tempo_map.analyse(inside)
+                    raw = _within(check.raw_beats, out_start, out_end)
+                    repaired = _within(check.repaired, out_start, out_end)
+                    if len(repaired) >= 2 * tempo_map.ANALYSIS_WINDOW:
+                        after = tempo_map.analyse(raw, repaired)
             results.append(SectionResult(float(beats[s.start]), float(beats[s.end]), out_start,
                                          s.end - s.start, s.detected_bpm, s.bpm, after))
         return results
+
+
+def _within(times: np.ndarray, start: float, end: float) -> np.ndarray:
+    return times[(times >= start) & (times <= end)]

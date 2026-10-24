@@ -14,7 +14,7 @@ changes, locking each section to its own tempo.
 ## Install
 
 ```bash
-pipx install git+https://github.com/mdbtq/bpm-lock@v1.1.0
+pipx install git+https://github.com/mdbtq/bpm-lock@v1.1.1
 ```
 
 Or from a local checkout: `pipx install .`
@@ -116,6 +116,10 @@ Tracker and stretcher are injectable, so alternative implementations
 
 - Tempo detection assumes a duple meter (most electronic and rock music).
   For tracks with swing or an unusual meter, pass `--bpm` and check the output.
+- In fills and breaks the beat tracker can misplace or drop beats. Such
+  stretches are detected and rebuilt at the surrounding tempo (with the beat
+  count re-counted), so they are not sped up or slowed down. Real tempo changes
+  are kept.
 - Half-time detections (< 100 BPM) are re-checked at double tempo.
   Tempi of 200+ are kept as detected.
 

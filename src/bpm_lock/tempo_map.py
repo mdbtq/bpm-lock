@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
-from .beats import robust_smooth
+from .beats import nearest_distance, robust_smooth
 
 if TYPE_CHECKING:
     from .segmentation import TempoSection
@@ -60,14 +60,19 @@ def choose_target_bpm(beats: np.ndarray, rounding: float | None) -> float:
     return round_bpm(60.0 / float(slope), rounding)
 
 
-def analyse(raw_beats: np.ndarray, window: int = ANALYSIS_WINDOW) -> TempoStats:
+def analyse(raw_beats: np.ndarray, repaired: np.ndarray | None = None,
+            window: int = ANALYSIS_WINDOW) -> TempoStats:
     """Separate tempo drift (slow, what bpm-lock removes) from per-hit timing
-    spread (fast, the groove/feel or detection noise, which is preserved)."""
-    curve = robust_smooth(raw_beats, window)
+    spread (fast, the groove/feel or detection noise, which is preserved).
+
+    The tempo curve is built from `repaired` beats (unreliable stretches such as
+    fills interpolated) when given; spread is always measured on the raw hits."""
+    curve = robust_smooth(raw_beats if repaired is None else repaired, window)
     # The first/last beats sit in intros/outros/fades where tracking is least
     # reliable and smoothing has no context; keep them out of the statistics.
     core = slice(EDGE_BEATS, -EDGE_BEATS) if len(curve) > 4 * EDGE_BEATS else slice(None)
-    beats, raw = curve[core], raw_beats[core]
+    beats = curve[core]
+    raw = raw_beats[(raw_beats >= beats[0]) & (raw_beats <= beats[-1])]
     local = 60.0 / np.diff(beats)
     idx = np.arange(len(beats))
     slope, offset = np.polyfit(idx, beats, 1)
@@ -77,7 +82,7 @@ def analyse(raw_beats: np.ndarray, window: int = ANALYSIS_WINDOW) -> TempoStats:
         min_bpm=float(np.percentile(local, 2)),
         max_bpm=float(np.percentile(local, 98)),
         max_drift_ms=float(np.percentile(drift, 98) * 1000),
-        spread_ms=float(np.percentile(np.abs(raw - beats), 95) * 1000),
+        spread_ms=float(np.percentile(nearest_distance(raw, beats), 95) * 1000),
     )
 
 

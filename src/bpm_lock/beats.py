@@ -7,6 +7,7 @@ so an alternative (e.g. librosa/madmom based) tracker can be plugged in.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import warnings
 from typing import Protocol
 
 import numpy as np
@@ -17,6 +18,10 @@ HOP = 128          # 5.8 ms frames at 22.05 kHz
 N_FFT = 2048
 N_BANDS = 64
 HALF_TIME_BELOW = 100.0  # BPM; slower estimates are re-checked at double tempo
+MAX_INTERVAL_JUMP = 0.08  # a beat interval deviating more than this from its
+                          # neighbourhood marks unreliable tracking (fills, breaks)
+MAX_PHASE_OFFSET = 0.10   # fraction of a beat a hit may sit off the reference curve
+PHASE_WINDOW = 33         # beats in the reference curve for the phase check
 
 
 class BeatTracker(Protocol):
@@ -25,8 +30,10 @@ class BeatTracker(Protocol):
 
 @dataclass(frozen=True)
 class BeatResult:
-    beats: np.ndarray       # beat times in seconds (smoothed)
-    raw_beats: np.ndarray   # beat times before smoothing
+    beats: np.ndarray       # beat times in seconds: repaired, then smoothed
+    raw_beats: np.ndarray   # beat times as detected
+    repaired: np.ndarray    # raw beats with unreliable stretches rebuilt (may differ in count)
+    reliable: np.ndarray    # bool per repaired beat; False where it was rebuilt
     tempo: float            # global tempo estimate (BPM) at the tracked metrical level
 
 
@@ -57,8 +64,10 @@ class DynamicProgrammingBeatTracker:
         if len(frames) < 4:
             raise ValueError("Too few beats detected; is this rhythmic material?")
         raw = _refine(env, frames) / fps
-        smoothed = robust_smooth(raw, self.config.smoothing_beats)
-        return BeatResult(beats=smoothed, raw_beats=raw, tempo=tempo)
+        repaired, reliable = repair(raw, reliable_mask(raw))
+        smoothed = robust_smooth(repaired, self.config.smoothing_beats)
+        return BeatResult(beats=smoothed, raw_beats=raw, repaired=repaired,
+                          reliable=reliable, tempo=tempo)
 
     # -- tempo ---------------------------------------------------------------
     def _estimate_tempo(self, env: np.ndarray, fps: float,
@@ -208,6 +217,140 @@ def _refine(env: np.ndarray, frames: np.ndarray, radius: int = 3) -> np.ndarray:
         shift = 0.5 * (a - c) / denom if denom < 0 else 0.0
         out[k] = p + np.clip(shift, -0.5, 0.5)
     return out
+
+
+def reliable_mask(beats: np.ndarray, side: int = 8,
+                  max_jump: float = MAX_INTERVAL_JUMP, bridge: int = 2) -> np.ndarray:
+    """Flag beats the tracker placed implausibly (fills, breaks, unclear beat).
+
+    An interval is suspect when it deviates from the typical interval both
+    before and after it; a real tempo change matches one of the two sides and is
+    left alone. Positions are then checked against a long, robust reference
+    curve, built separately on each side of real tempo changes, because in a
+    fill the tracker can slip behind with ordinary-looking intervals (or drop
+    beats) and catch up later.
+    """
+    ibi = np.diff(beats)
+    before = _side_median(ibi, side, past=True)
+    after = _side_median(ibi, side, past=False)
+    with np.errstate(invalid="ignore"):
+        off_before = np.abs(ibi / before - 1.0) > max_jump
+        off_after = np.abs(ibi / after - 1.0) > max_jump
+    bad_interval = np.where(np.isnan(before), off_after,
+                            np.where(np.isnan(after), off_before, off_before & off_after))
+    # close short gaps between bad intervals: fills alternate good and bad hits
+    idx = np.nonzero(bad_interval)[0]
+    for a, b in zip(idx, idx[1:]):
+        if b - a <= bridge + 1:
+            bad_interval[a:b] = True
+    reliable = np.ones(len(beats), dtype=bool)
+    reliable[1:][bad_interval] = False
+    reliable[:-1][bad_interval] = False
+
+    step_times = beats[tempo_steps(ibi, side, max_jump) + 1]
+    max_offset = MAX_PHASE_OFFSET * float(np.median(ibi))
+    for _ in range(6):
+        repaired, _ = repair(beats, reliable)
+        reference = _piecewise_smooth(repaired, step_times, PHASE_WINDOW)
+        updated = reliable & (nearest_distance(beats, reference) <= max_offset)
+        if (updated == reliable).all():
+            break
+        reliable = updated
+    return reliable
+
+
+def tempo_steps(ibi: np.ndarray, side: int, min_change: float) -> np.ndarray:
+    """Interval indices where the typical interval changes by more than
+    `min_change` between the `side` intervals before and after: real tempo changes."""
+    before = _side_median(ibi, side, past=True)
+    after = _side_median(ibi, side, past=False)
+    with np.errstate(invalid="ignore"):
+        change = np.abs(np.log(after / before))
+    change = np.nan_to_num(change)
+    above = change > np.log1p(min_change)
+    steps = []
+    i = 0
+    while i < len(above):
+        if above[i]:
+            j = i
+            while j < len(above) and above[j]:
+                j += 1
+            steps.append(i + int(np.argmax(change[i:j])))
+            i = j
+        else:
+            i += 1
+    return np.asarray(steps, dtype=np.int64)
+
+
+def _side_median(x: np.ndarray, side: int, past: bool) -> np.ndarray:
+    """Median of the `side` values before (past) or after each element, excluding
+    the element itself; NaN where fewer than half of them exist."""
+    pad = np.full(side, np.nan)
+    padded = np.concatenate([pad, x, pad])
+    windows = np.lib.stride_tricks.sliding_window_view(padded, side)
+    start = np.arange(len(x)) + (0 if past else side + 1)
+    w = windows[start]
+    with warnings.catch_warnings():   # all-NaN windows at the edges are expected
+        warnings.simplefilter("ignore", RuntimeWarning)
+        med = np.nanmedian(w, axis=1)
+    med[np.sum(~np.isnan(w), axis=1) < side // 2] = np.nan
+    return med
+
+
+def _piecewise_smooth(beats: np.ndarray, boundaries: np.ndarray, window: int) -> np.ndarray:
+    """robust_smooth applied separately between boundary times (tempo changes)."""
+    cuts = np.searchsorted(beats, boundaries)
+    edges = [0, *[int(c) for c in cuts if 0 < c < len(beats)], len(beats)]
+    return np.concatenate([robust_smooth(beats[a:b], window)
+                           for a, b in zip(edges, edges[1:]) if b > a])
+
+
+def repair(beats: np.ndarray, reliable: np.ndarray,
+           context: int = 16) -> tuple[np.ndarray, np.ndarray]:
+    """Rebuild unreliable stretches at constant tempo between their reliable
+    neighbours. The number of beats in a stretch is re-counted from the tempo of
+    the surrounding reliable beats, so beats the tracker dropped or doubled in a
+    fill are restored. Returns (beats, reliable) for the rebuilt sequence."""
+    good = np.nonzero(reliable)[0]
+    if reliable.all() or len(good) < 2:
+        return beats.copy(), reliable.copy()
+
+    # intervals between directly adjacent reliable beats, for local tempo
+    pair = good[np.nonzero(np.diff(good) == 1)[0]]
+    pair_ibi = beats[pair + 1] - beats[pair]
+    global_period = float(np.median(pair_ibi)) if len(pair) else float(np.median(np.diff(beats)))
+
+    def period_near(a: int, b: int) -> float:
+        near = (pair >= a - context) & (pair <= b + context)
+        return float(np.median(pair_ibi[near])) if near.sum() >= 4 else global_period
+
+    out: list[float] = []
+    mask: list[bool] = []
+    first, last = good[0], good[-1]
+    p_in = period_near(first, first)
+    out.extend(beats[first] - p_in * np.arange(first, 0, -1))      # lead-in, count kept
+    mask.extend([False] * first)
+    for g0, g1 in zip(good, good[1:]):
+        out.append(beats[g0])
+        mask.append(True)
+        if g1 - g0 > 1:
+            span = beats[g1] - beats[g0]
+            n = max(1, int(round(span / period_near(g0, g1))))
+            out.extend(beats[g0] + span * np.arange(1, n) / n)
+            mask.extend([False] * (n - 1))
+    out.append(beats[last])
+    mask.append(True)
+    p_out = period_near(last, last)
+    tail = len(beats) - 1 - last
+    out.extend(beats[last] + p_out * np.arange(1, tail + 1))         # outro, count kept
+    mask.extend([False] * tail)
+    return np.asarray(out), np.asarray(mask)
+
+
+def nearest_distance(times: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    """Distance from each time to the closest point of a sorted grid."""
+    i = np.clip(np.searchsorted(grid, times), 1, len(grid) - 1)
+    return np.minimum(np.abs(times - grid[i - 1]), np.abs(times - grid[i]))
 
 
 def robust_smooth(times: np.ndarray, window: int, iterations: int = 3) -> np.ndarray:
