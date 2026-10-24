@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
 from .beats import robust_smooth
+
+if TYPE_CHECKING:
+    from .segmentation import TempoSection
 
 ANALYSIS_WINDOW = 15  # beats; separates slow drift from per-hit timing
 EDGE_BEATS = 8
@@ -15,7 +19,7 @@ EDGE_BEATS = 8
 class TimeMap:
     source: np.ndarray   # anchor times in the input (seconds), strictly increasing
     target: np.ndarray   # corresponding times in the output (seconds)
-    target_bpm: float
+    beat_targets: np.ndarray  # output time of every detected beat
 
     @property
     def output_duration(self) -> float:
@@ -41,16 +45,19 @@ def octave_factor(bpm: float, low: float = 100.0) -> float:
     return float(2.0 ** np.ceil(np.log2(low / bpm))) if bpm < low else 1.0
 
 
+def round_bpm(bpm: float, rounding: float | None) -> float:
+    """Round at the musical level (>= 100 BPM) so half-time tracking still lands
+    on whole BPMs."""
+    if not rounding:
+        return bpm
+    f = octave_factor(bpm)
+    return round(bpm * f / rounding) * rounding / f
+
+
 def choose_target_bpm(beats: np.ndarray, rounding: float | None) -> float:
-    """Detected tempo at the tracked beat level; rounding is applied at the
-    musical level (>= 100 BPM) so half-time tracking still lands on whole BPMs."""
-    # least-squares constant-tempo fit = the tempo that needs the least stretching overall
+    """Least-squares constant tempo = the tempo that needs the least stretching overall."""
     slope = np.polyfit(np.arange(len(beats)), beats, 1)[0]
-    bpm = 60.0 / float(slope)
-    if rounding:
-        f = octave_factor(bpm)
-        bpm = round(bpm * f / rounding) * rounding / f
-    return bpm
+    return round_bpm(60.0 / float(slope), rounding)
 
 
 def analyse(raw_beats: np.ndarray, window: int = ANALYSIS_WINDOW) -> TempoStats:
@@ -74,23 +81,27 @@ def analyse(raw_beats: np.ndarray, window: int = ANALYSIS_WINDOW) -> TempoStats:
     )
 
 
-def build(beats: np.ndarray, duration: float, target_bpm: float,
+def build(beats: np.ndarray, duration: float, sections: Sequence["TempoSection"],
           edge_beats: int = 4) -> TimeMap:
-    """Map every detected beat onto a uniform grid of `target_bpm`.
+    """Map every detected beat onto a grid that is uniform within each section.
 
-    Material before the first and after the last beat is stretched with the
-    local ratio of the nearest beats so intros/outros keep their feel.
+    Sections are contiguous beat ranges, each with its own target tempo; the grid
+    is continuous across section boundaries. Material before the first and after
+    the last beat is stretched with the local ratio of the nearest beats so
+    intros/outros keep their feel.
     """
-    period = 60.0 / target_bpm
+    n = len(beats)
+    period = np.empty(n - 1)               # target length of each beat interval
+    for s in sections:
+        period[s.start:s.end] = 60.0 / s.bpm
     ibi = np.diff(beats)
-    r_in = period / float(np.median(ibi[:edge_beats]))
-    r_out = period / float(np.median(ibi[-edge_beats:]))
+    r_in = period[0] / float(np.median(ibi[:edge_beats]))
+    r_out = period[-1] / float(np.median(ibi[-edge_beats:]))
 
-    first = beats[0] * r_in
-    grid = first + period * np.arange(len(beats))
+    grid = beats[0] * r_in + np.concatenate([[0.0], np.cumsum(period)])
     tail = grid[-1] + (duration - beats[-1]) * r_out
 
     source = np.concatenate([[0.0], beats, [duration]])
     target = np.concatenate([[0.0], grid, [tail]])
     keep = np.concatenate([[True], np.diff(source) > 1e-6])
-    return TimeMap(source[keep], target[keep], target_bpm)
+    return TimeMap(source[keep], target[keep], grid)

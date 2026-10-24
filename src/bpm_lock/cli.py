@@ -35,6 +35,11 @@ def _run_one(src: Path, dst: Path, backend: str, options: Options) -> Report:
     return BpmLocker(stretchers.select(backend), options).process(src, dst)
 
 
+def _clock(seconds: float) -> str:
+    m, s = divmod(seconds, 60)
+    return f"{int(m)}:{s:04.1f}"
+
+
 def _format(r: Report) -> str:
     b = r.before
     f = octave_factor(r.target_bpm)
@@ -42,12 +47,31 @@ def _format(r: Report) -> str:
             f"(range {b.min_bpm * f:.2f}-{b.max_bpm * f:.2f}, drift {b.max_drift_ms:.1f} ms)")
     if r.skipped:
         return line + " -> already fixed, skipped"
-    line += f" -> {r.target_bpm * f:g} BPM [{r.backend}]"
-    if r.after:
-        a = r.after
-        line += (f", now {a.detected_bpm * f:.2f} BPM, drift {a.max_drift_ms:.1f} ms"
-                 f" (per-hit spread {a.spread_ms:.1f} ms, kept as-is)")
-    return line
+    if len(r.sections) == 1:
+        s = r.sections[0]
+        line += f" -> {s.bpm * f:g} BPM [{r.backend}]"
+        if s.after:
+            a = s.after
+            line += (f", now {a.detected_bpm * f:.2f} BPM, drift {a.max_drift_ms:.1f} ms"
+                     f" (per-hit spread {a.spread_ms:.1f} ms, kept as-is)")
+        return line
+    return "\n".join([line + f" -> {len(r.sections)} sections [{r.backend}]",
+                      *_section_table(r, f)])
+
+
+def _section_table(r: Report, f: float) -> list[str]:
+    rows = [("#", "in", "out", "beats", "detected", "locked", "now", "drift", "spread")]
+    for i, s in enumerate(r.sections, 1):
+        a = s.after
+        rows.append((
+            str(i), _clock(s.start_s), _clock(s.out_start_s), str(s.beats),
+            f"{s.detected_bpm * f:.2f}", f"{s.bpm * f:g}",
+            f"{a.detected_bpm * f:.2f}" if a else "-",
+            f"{a.max_drift_ms:.1f} ms" if a else "-",
+            f"{a.spread_ms:.1f} ms" if a else "-",
+        ))
+    widths = [max(len(row[c]) for row in rows) for c in range(len(rows[0]))]
+    return ["  " + "  ".join(v.rjust(w) for v, w in zip(row, widths)) for row in rows]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -61,6 +85,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="rounding step for detected BPM (default 1; 0 = no rounding)")
     p.add_argument("--hint", type=float, default=120.0,
                    help="tempo hint for detection when --bpm is not given (default 120)")
+    p.add_argument("-t", "--tolerance", type=float, metavar="BPM",
+                   help="allow intentional tempo changes: lock within ±BPM of a baseline and "
+                        "start a new section (new baseline) when the tempo stays outside it")
+    p.add_argument("--hold", type=int, default=8, metavar="BEATS",
+                   help="beats the tempo must stay outside the tolerance before a new section "
+                        "starts (default 8)")
+    p.add_argument("--min-section", type=int, default=32, metavar="BEATS",
+                   help="shortest allowed section; shorter ones (fills, breaks) are merged "
+                        "into a neighbour (default 32)")
     p.add_argument("--smooth", type=int, default=9,
                    help="beats in drift-smoothing window (default 9; 0 = follow every beat)")
     p.add_argument("--skip-below", type=float, default=0.0, metavar="MS",
@@ -85,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
 
     options = Options(target_bpm=args.bpm, rounding=args.rounding or None,
                       bpm_hint=args.hint, smoothing_beats=args.smooth,
+                      tolerance=args.tolerance, hold_beats=args.hold,
+                      min_section_beats=args.min_section,
                       min_drift_ms=args.skip_below, verify=not args.no_verify)
     jobs = [(f, _output_path(f, args.out_dir, args.suffix, args.format))
             for f in _collect(args.inputs) if args.suffix not in f.stem]

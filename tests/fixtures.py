@@ -13,8 +13,21 @@ def drifting_track(base_bpm: float, duration: float = 40.0, wobble: float = 0.00
     while t < duration - 0.5:
         beats.append(t)
         t += 60 / (base_bpm * (1 + wobble * np.sin(2 * np.pi * t / 20)))
-    beats = np.array(beats)
+    return render(np.array(beats), duration, sr, seed), np.array(beats)
 
+
+def stepped_track(changes: list[tuple[float, float]], duration: float = 60.0,
+                  wobble: float = 0.006, sr: int = SR) -> tuple[np.ndarray, np.ndarray]:
+    """Intentional tempo changes: `changes` = [(start_s, bpm), ...] with slight drift."""
+    beats, t = [], 0.3
+    while t < duration - 0.5:
+        bpm = [b for start, b in changes if t >= start][-1]
+        beats.append(t)
+        t += 60 / (bpm * (1 + wobble * np.sin(2 * np.pi * t / 9)))
+    return render(np.array(beats), duration, sr), np.array(beats)
+
+
+def render(beats: np.ndarray, duration: float, sr: int = SR, seed: int = 0) -> np.ndarray:
     rng = np.random.default_rng(seed)
     y = np.zeros(int(duration * sr), np.float32)
     n = np.arange(int(0.25 * sr)) / sr
@@ -36,7 +49,7 @@ def drifting_track(base_bpm: float, duration: float = 40.0, wobble: float = 0.00
             add(hat, b)
             add(hat, half)
             add(bass, half)
-    return np.stack([y, y]) * 0.6, beats
+    return np.stack([y, y]) * 0.6
 
 
 def kick_times(mono: np.ndarray, sr: int = SR) -> np.ndarray:

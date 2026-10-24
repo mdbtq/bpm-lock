@@ -2,4 +2,4 @@
 from .pipeline import BpmLocker, Options, Report
 
 __all__ = ["BpmLocker", "Options", "Report"]
-__version__ = "1.0.1"
+__version__ = "1.1.0"
