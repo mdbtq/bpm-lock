@@ -80,6 +80,27 @@ class FillRepair(unittest.TestCase):
         stretch = repaired[k:k + 32]
         self.assertAlmostEqual(60 * 31 / (stretch[-1] - stretch[0]), 160, delta=0.5)
 
+    def test_switch_to_the_off_beat_across_a_fill_is_undone(self):
+        # With steady eighths the tracker can come out of a fill on the off-beat.
+        # Rebuilt as is, the fill spans x.5 beats: it drifts half a beat and
+        # jumps back. The later beats must be moved back onto the beat.
+        _, truth = drifting_track(160, duration=60, wobble=0.0)
+        p = 60 / 160
+        k = int(np.argmax(truth >= 25))
+        messy = truth.copy()
+        messy[k + 1:k + 12] += p * np.array([0.3, -0.2, 0.35, 0.1, -0.3, 0.4,
+                                             0.2, -0.25, 0.45, 0.1, 0.3])   # fill
+        messy[k + 12:-1] += 0.5 * p                                          # off-beat
+        messy = messy[:-1]
+        reliable = beats_mod.reliable_mask(messy)
+        aligned = beats_mod.align_phase(messy, reliable)
+        repaired, _ = beats_mod.repair(aligned, reliable)
+        after = repaired[(repaired > 31) & (repaired < 55)]
+        self.assertEqual(len(after), np.sum((truth > 31) & (truth < 55)))
+        self.assertLess(beats_mod.nearest_distance(after, truth).max(), 0.002)
+        fill = repaired[(repaired >= truth[k]) & (repaired <= truth[k + 12] + 1e-6)]
+        self.assertAlmostEqual(60 * (len(fill) - 1) / (fill[-1] - fill[0]), 160, delta=0.5)
+
     def test_clean_track_is_left_alone(self):
         _, truth = drifting_track(174, duration=40)
         repaired, reliable = beats_mod.repair(truth, beats_mod.reliable_mask(truth))

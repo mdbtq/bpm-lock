@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.2] - 2026-11-15
+
+### Fixed
+- A fill could still slow down (or speed up) gradually and then jump back when
+  the beat tracker came out of it on the off-beat, which steady eighth notes
+  make easy. The fill then spanned about half a beat more or less than a whole
+  number of beats. Such a switch is now detected (a rebuilt stretch between two
+  runs of reliable beats spanning close to x.5 beats) and undone by moving the
+  later beats back half a beat.
+
 ## [1.2.1] - 2026-11-15
 
 ### Fixed
@@ -77,6 +87,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - CLI with batch folders, parallel jobs, output format selection, JSON report
   and post-processing verification.
 
+[1.2.2]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.2.2
 [1.2.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.2.1
 [1.2.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.2.0
 [1.1.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.1.1

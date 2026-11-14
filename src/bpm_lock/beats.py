@@ -24,6 +24,8 @@ MAX_PHASE_OFFSET = 0.10   # fraction of a beat a hit may sit off the reference c
 PHASE_WINDOW = 33         # beats in the reference curve for the phase check
 MAX_ANCHOR_SLIP = 0.25    # beats a rebuilt stretch may deviate from a whole count
 KEEP_RUN_BEATS = 16       # reliable runs this long are never dropped as off phase
+MAX_SWITCH_GAP = 64       # beats; longer rebuilt stretches are not checked for an
+                          # off-beat switch (the count is too uncertain there)
 
 
 class BeatTracker(Protocol):
@@ -33,7 +35,7 @@ class BeatTracker(Protocol):
 @dataclass(frozen=True)
 class BeatResult:
     beats: np.ndarray       # beat times in seconds: repaired, then smoothed
-    raw_beats: np.ndarray   # beat times as detected
+    raw_beats: np.ndarray   # beat times as detected (off-beat switches undone)
     repaired: np.ndarray    # raw beats with unreliable stretches rebuilt (may differ in count)
     reliable: np.ndarray    # bool per repaired beat; False where it was rebuilt
     tempo: float            # global tempo estimate (BPM) at the tracked metrical level
@@ -66,7 +68,9 @@ class DynamicProgrammingBeatTracker:
         if len(frames) < 4:
             raise ValueError("Too few beats detected; is this rhythmic material?")
         raw = _refine(env, frames) / fps
-        repaired, reliable = repair(raw, reliable_mask(raw))
+        reliable = reliable_mask(raw)
+        raw = align_phase(raw, reliable)
+        repaired, reliable = repair(raw, reliable)
         smoothed = robust_smooth(repaired, self.config.smoothing_beats)
         return BeatResult(beats=smoothed, raw_beats=raw, repaired=repaired,
                           reliable=reliable, tempo=tempo)
@@ -370,11 +374,7 @@ def _drop_off_phase_runs(beats: np.ndarray, reliable: np.ndarray, context: int =
     """
     reliable = reliable.copy()
     while True:
-        good = np.nonzero(reliable)[0]
-        breaks = np.nonzero(np.diff(good) > 1)[0]
-        starts = np.concatenate([[0], breaks + 1])
-        ends = np.concatenate([breaks, [len(good) - 1]])
-        runs = [good[s:e + 1] for s, e in zip(starts, ends)]
+        runs = _reliable_runs(reliable)
         period_near = _period_estimator(beats, reliable, context)
         for r0, r1 in zip(runs, runs[1:]):
             g0, g1 = r0[-1], r1[0]
@@ -387,6 +387,43 @@ def _drop_off_phase_runs(beats: np.ndarray, reliable: np.ndarray, context: int =
                 break
         else:
             return reliable
+
+
+def align_phase(beats: np.ndarray, reliable: np.ndarray, context: int = 16,
+                max_slip: float = MAX_ANCHOR_SLIP, max_gap: int = MAX_SWITCH_GAP) -> np.ndarray:
+    """Undo a switch to the off-beat across a rebuilt stretch.
+
+    With steady eighth notes the on- and off-beat look alike, and in a fill the
+    tracker can come out on the other one. The stretch then spans about half a
+    beat more or less than a whole number; rebuilt at constant tempo it would
+    drift half a beat behind (or ahead) and jump back at its end. When the gap
+    between two runs of reliable beats spans close to x.5 beats, every beat from
+    the later run onwards is moved back half a beat, so the beat stays on the
+    same musical position throughout the track.
+    """
+    beats = beats.copy()
+    period_near = _period_estimator(beats, reliable, context)   # intervals are shift-invariant
+    runs = _reliable_runs(reliable)
+    for r0, r1 in zip(runs, runs[1:]):
+        g0, g1 = r0[-1], r1[0]
+        if g1 - g0 > max_gap:
+            continue
+        period = period_near(g0, g1)
+        n = (beats[g1] - beats[g0]) / period
+        if abs(n - np.floor(n) - 0.5) < 0.5 - max_slip and n > 1:
+            beats[g1:] -= 0.5 * period
+    return beats
+
+
+def _reliable_runs(reliable: np.ndarray) -> list[np.ndarray]:
+    """Index arrays of the consecutive runs of reliable beats."""
+    good = np.nonzero(reliable)[0]
+    if len(good) == 0:
+        return []
+    breaks = np.nonzero(np.diff(good) > 1)[0]
+    starts = np.concatenate([[0], breaks + 1])
+    ends = np.concatenate([breaks, [len(good) - 1]])
+    return [good[s:e + 1] for s, e in zip(starts, ends)]
 
 
 def nearest_distance(times: np.ndarray, grid: np.ndarray) -> np.ndarray:
