@@ -22,6 +22,8 @@ MAX_INTERVAL_JUMP = 0.08  # a beat interval deviating more than this from its
                           # neighbourhood marks unreliable tracking (fills, breaks)
 MAX_PHASE_OFFSET = 0.10   # fraction of a beat a hit may sit off the reference curve
 PHASE_WINDOW = 33         # beats in the reference curve for the phase check
+MAX_ANCHOR_SLIP = 0.25    # beats a rebuilt stretch may deviate from a whole count
+KEEP_RUN_BEATS = 16       # reliable runs this long are never dropped as off phase
 
 
 class BeatTracker(Protocol):
@@ -228,7 +230,8 @@ def reliable_mask(beats: np.ndarray, side: int = 8,
     left alone. Positions are then checked against a long, robust reference
     curve, built separately on each side of real tempo changes, because in a
     fill the tracker can slip behind with ordinary-looking intervals (or drop
-    beats) and catch up later.
+    beats) and catch up later. Finally, short runs of reliable beats that sit
+    off phase relative to their neighbours are dropped (see _drop_off_phase_runs).
     """
     ibi = np.diff(beats)
     before = _side_median(ibi, side, past=True)
@@ -256,7 +259,7 @@ def reliable_mask(beats: np.ndarray, side: int = 8,
         if (updated == reliable).all():
             break
         reliable = updated
-    return reliable
+    return _drop_off_phase_runs(beats, reliable)
 
 
 def tempo_steps(ibi: np.ndarray, side: int, min_change: float) -> np.ndarray:
@@ -315,15 +318,7 @@ def repair(beats: np.ndarray, reliable: np.ndarray,
     if reliable.all() or len(good) < 2:
         return beats.copy(), reliable.copy()
 
-    # intervals between directly adjacent reliable beats, for local tempo
-    pair = good[np.nonzero(np.diff(good) == 1)[0]]
-    pair_ibi = beats[pair + 1] - beats[pair]
-    global_period = float(np.median(pair_ibi)) if len(pair) else float(np.median(np.diff(beats)))
-
-    def period_near(a: int, b: int) -> float:
-        near = (pair >= a - context) & (pair <= b + context)
-        return float(np.median(pair_ibi[near])) if near.sum() >= 4 else global_period
-
+    period_near = _period_estimator(beats, reliable, context)
     out: list[float] = []
     mask: list[bool] = []
     first, last = good[0], good[-1]
@@ -345,6 +340,53 @@ def repair(beats: np.ndarray, reliable: np.ndarray,
     out.extend(beats[last] + p_out * np.arange(1, tail + 1))         # outro, count kept
     mask.extend([False] * tail)
     return np.asarray(out), np.asarray(mask)
+
+
+def _period_estimator(beats: np.ndarray, reliable: np.ndarray, context: int):
+    """Returns period_near(a, b): the median interval between directly adjacent
+    reliable beats within `context` beats of the index range a..b."""
+    good = np.nonzero(reliable)[0]
+    pair = good[np.nonzero(np.diff(good) == 1)[0]]
+    pair_ibi = beats[pair + 1] - beats[pair]
+    global_period = float(np.median(pair_ibi)) if len(pair) else float(np.median(np.diff(beats)))
+
+    def period_near(a: int, b: int) -> float:
+        near = (pair >= a - context) & (pair <= b + context)
+        return float(np.median(pair_ibi[near])) if near.sum() >= 4 else global_period
+
+    return period_near
+
+
+def _drop_off_phase_runs(beats: np.ndarray, reliable: np.ndarray, context: int = 16,
+                         max_slip: float = MAX_ANCHOR_SLIP,
+                         keep: int = KEEP_RUN_BEATS) -> np.ndarray:
+    """A rebuilt stretch must span a whole number of beats. When the gap between
+    two runs of reliable beats does not, one run sits off phase: in a fill the
+    tracker can settle on the off-beat for a few beats, with ordinary intervals,
+    and repair would then anchor on it and count a beat too many or too few
+    (an audible slow-down or speed-up of the whole stretch). The shorter run of
+    the two is dropped, so the stretch is rebuilt between trustworthy anchors.
+    Two runs of `keep` beats or more are both kept: that is a real tempo change.
+    """
+    reliable = reliable.copy()
+    while True:
+        good = np.nonzero(reliable)[0]
+        breaks = np.nonzero(np.diff(good) > 1)[0]
+        starts = np.concatenate([[0], breaks + 1])
+        ends = np.concatenate([breaks, [len(good) - 1]])
+        runs = [good[s:e + 1] for s, e in zip(starts, ends)]
+        period_near = _period_estimator(beats, reliable, context)
+        for r0, r1 in zip(runs, runs[1:]):
+            g0, g1 = r0[-1], r1[0]
+            n = (beats[g1] - beats[g0]) / period_near(g0, g1)
+            if abs(n - round(n)) <= max_slip:
+                continue
+            shorter = r0 if len(r0) <= len(r1) else r1
+            if len(shorter) < keep:
+                reliable[shorter] = False
+                break
+        else:
+            return reliable
 
 
 def nearest_distance(times: np.ndarray, grid: np.ndarray) -> np.ndarray:

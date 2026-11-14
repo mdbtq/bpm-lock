@@ -4,6 +4,16 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-11-15
+
+### Fixed
+- A long fill could slow down (or speed up) by several percent. When the
+  tracker sat on the off-beat for a few beats inside a fill, with ordinary
+  intervals, those beats were kept as anchors and the rebuild counted a beat
+  too many or too few. Short runs of reliable beats whose gap to the next run
+  is not a whole number of beats are now dropped as anchors (runs of 16 beats
+  or more are kept, so real tempo changes are unaffected).
+
 ## [1.2.0] - 2026-10-24
 
 ### Added
@@ -67,6 +77,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - CLI with batch folders, parallel jobs, output format selection, JSON report
   and post-processing verification.
 
+[1.2.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.2.1
 [1.2.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.2.0
 [1.1.1]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.1.1
 [1.1.0]: https://github.com/mdbtq/bpm-lock/releases/tag/v1.1.0

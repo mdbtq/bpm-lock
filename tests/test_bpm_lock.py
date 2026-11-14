@@ -58,6 +58,28 @@ class FillRepair(unittest.TestCase):
         self.assertAlmostEqual(fill.mean(), 162, delta=0.5)
         self.assertLessEqual(np.abs(fill - 162).max(), np.abs(t_base - 162).max() + 0.5)
 
+    def test_off_phase_runs_in_fill_do_not_change_the_beat_count(self):
+        # Pattern seen on a live metal take: in a fill the tracker settles on the
+        # off-beat for a few beats with normal intervals, in between messy hits.
+        # Anchoring the rebuild on those runs added a beat and slowed the
+        # stretch down by ~5 %.
+        _, truth = drifting_track(160, duration=60, wobble=0.0)
+        p = 60 / 160
+        k = int(np.argmax(truth >= 30))
+        slip = np.zeros(len(truth))
+        slip[k + 1:k + 31] = np.r_[[0.1, -0.15, 0.2, -0.3, -0.4, -0.45],   # slipping
+                                   [-0.45, -0.45],                         # off-beat run
+                                   [-0.6, -0.3, -0.55, -0.5, -0.5, -0.5, -0.5],
+                                   [0.45] * 6,                             # off-beat run
+                                   [0.3, 0.2, 0.55, 0.6, -0.2, -0.1],
+                                   [0.5, 0.15, -0.1]]
+        messy = truth + slip * p
+        repaired, reliable = beats_mod.repair(messy, beats_mod.reliable_mask(messy))
+        self.assertEqual(len(repaired), len(truth))
+        self.assertFalse(reliable[k + 1:k + 31].any())
+        stretch = repaired[k:k + 32]
+        self.assertAlmostEqual(60 * 31 / (stretch[-1] - stretch[0]), 160, delta=0.5)
+
     def test_clean_track_is_left_alone(self):
         _, truth = drifting_track(174, duration=40)
         repaired, reliable = beats_mod.repair(truth, beats_mod.reliable_mask(truth))
