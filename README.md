@@ -166,6 +166,8 @@ Tracker and stretcher are injectable, so alternative implementations
   before locking them with `--stems`.
 - [beat-split](https://github.com/mdbtq/beat-split) – cut a locked track into
   chunks of a fixed number of beats.
+- [drum-kit](https://github.com/mdbtq/drum-kit) – extract the drums and pick the
+  best one-shots per drum.
 
 ## Tests
 
