@@ -160,6 +160,13 @@ Tracker and stretcher are injectable, so alternative implementations
 - Half-time detections (< 100 BPM) are re-checked at double tempo.
   Tempi of 200+ are kept as detected.
 
+## See also
+
+- [stem-split](https://github.com/mdbtq/stem-split) – split a track into stems
+  before locking them with `--stems`.
+- [beat-split](https://github.com/mdbtq/beat-split) – cut a locked track into
+  chunks of a fixed number of beats.
+
 ## Tests
 
 ```bash
